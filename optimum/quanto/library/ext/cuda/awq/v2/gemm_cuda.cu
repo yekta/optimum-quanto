@@ -5,8 +5,6 @@
 #include <torch/extension.h>
 #include <cuda_pipeline_primitives.h>
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-// The following GEMMs requires m16n8k16 which is only supported for CUDA arch after sm80
 
 #define kInterleave 4
 #define OP_M 16
@@ -920,6 +918,9 @@ __global__ void gemm_w4a16_T2(half *__restrict__ A, half *__restrict__ B, half *
     }
   }
 }
+
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
 
 torch::Tensor awq_v2_gemm_f16i4(
     torch::Tensor _in_feats,
