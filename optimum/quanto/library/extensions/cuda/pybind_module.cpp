@@ -34,4 +34,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("fp8_marlin_gemm", &fp8_marlin_gemm, "fp8_marlin_gemm");
   m.def("marlin_gemm_f16i4", &mul, "marlin_gemm_f16i4");
   m.def("unpack", &unpack, "unpack");
+  m.def("marlin_gemm_f16i4", &mul, "marlin_gemm_f16i4");
 }
