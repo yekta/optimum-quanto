@@ -17,7 +17,7 @@ import pytest
 import torch
 from helpers import assert_similar, random_tensor
 
-from optimum.quanto import AWQPackedTensor, AWQPacking
+from optimum.quanto import AWQPackedTensor, AWQPacking, MarlinPackedTensor
 from optimum.quanto.tensor.weights.marlin.packed import get_scale_perms, pack_fp8_as_int32
 
 
@@ -137,3 +137,70 @@ def test_fp8_marlin(tokens, in_features, out_features, dtype):
     pt_outputs = torch.matmul(inputs.to(dtype), other)
     # Verify the results are similar
     assert_similar(lib_outputs, pt_outputs)
+
+
+# FIXME: should implement permute_scales() inside MarlinBitsTensor
+def _get_scale_perm():
+    scale_perm = []
+    for i in range(8):
+        scale_perm.extend([i + 8 * j for j in range(8)])
+    scale_perm_single = []
+    for i in range(4):
+        scale_perm_single.extend([2 * i + j for j in [0, 1, 8, 9, 16, 17, 24, 25]])
+    return scale_perm, scale_perm_single
+
+
+_scale_perm, _ = _get_scale_perm()
+
+
+def permute_scales(scales: torch.Tensor):
+    s = scales
+    _, N = s.shape
+    s = s.reshape((-1, len(_scale_perm)))[:, _scale_perm]
+    s = s.reshape((-1, N)).contiguous()
+    return s
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 8,
+    reason="CUDA device >= sm80 not available",
+)
+@pytest.mark.parametrize("in_features, out_features", [(256, 256), (512, 256)])
+@pytest.mark.parametrize("batch_size, tokens", [(4, 1), (10, 128)], ids=["gemv", "gemm"])
+def test_gemm_marlin_fp16_int4(batch_size, tokens, in_features, out_features):
+    bits = 4
+    group_size = 128  # Hard-coded in kernels
+    device = torch.device("cuda")
+    input_shape = (batch_size, tokens, in_features)
+    # FIXME: does not work if inputs are negative !!??
+    inputs = torch.rand(input_shape, dtype=torch.float16, device=device)
+    qmax = 2**bits
+    other_shape = (out_features, in_features)
+    other_data = torch.randint(0, qmax, other_shape, dtype=torch.uint8, device=device)
+    # The GEMM kernel works on transposed scales
+    scales_shape = (in_features // group_size, out_features)
+    other_scales = torch.rand(scales_shape, dtype=torch.float16, device=device) / qmax
+    # This kernel works on transposed, negated and scaled zeropoints
+    qmin = -(2 ** (bits - 1))
+    qmax = 2 ** (bits - 1)
+    other_shifts = torch.randint(qmin, qmax, scales_shape, dtype=torch.int8, device=device)
+    # Negate and scale
+    other_scaled_shifts = -other_shifts * other_scales
+    workspace = torch.zeros(out_features // 128 * 16, dtype=torch.int, device=inputs.device)
+    packed_other_data_marlin = MarlinPackedTensor.pack(other_data)._data
+    # Apply scale and shift permutations
+    other_scales_marlin = permute_scales(other_scales)
+    other_scaled_shifts_marlin = permute_scales(other_scaled_shifts)
+    lib_outputs = torch.ops.quanto.gemm_marlin(
+        inputs, packed_other_data_marlin, other_scales_marlin, other_scaled_shifts_marlin, workspace
+    )
+    # Transpose other data and reshape it to align it with transposed scales and zeros
+    other_data_t = other_data.t().reshape(group_size, in_features // group_size, out_features)
+    # Dequantize transposed other
+    other_t = other_data_t * other_scales + other_scaled_shifts
+    # Reshape it as expected by the matmul
+    other_t = other_t.reshape(in_features, out_features)
+    # Evaluate the matrix multiplication using pytorch float16 mm
+    pt_outputs = torch.matmul(inputs, other_t)
+    # Verify the results are similar
+    assert_similar(lib_outputs, pt_outputs, rtol=1e-3)
