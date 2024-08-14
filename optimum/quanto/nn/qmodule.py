@@ -156,6 +156,7 @@ class QModuleMixin(ABC):
         if self.weight_qtype is not None and weight_name not in state_dict:
             # The weight Tensor is not present because it is a flattened QTensor
             weight_prefix = weight_name + "."
+            # TODO: Modify the factory methods below in subtensor classes to support strict=False
             if self.weight_qtype.bits == 8:
                 deserialized_weight = WeightQBytesTensor.load_from_state_dict(
                     state_dict,
