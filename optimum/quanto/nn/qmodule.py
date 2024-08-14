@@ -189,7 +189,7 @@ class QModuleMixin(ABC):
                     self.weight = torch.nn.Parameter(deserialized_weight.to(self.weight.device))
 
         super()._load_from_state_dict(
-            state_dict, prefix, local_metadata, False, missing_keys, unexpected_keys, error_msgs
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
         )
 
     @classmethod
